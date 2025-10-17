@@ -1,7 +1,7 @@
 import { connect } from 'cloudflare:sockets';
 
 // --- 硬编码配置 ---
-const authToken = 'f64bdc57-0f54-4705-bf75-cfd646d98c06';
+const authToken = '94541e89-743b-4ef7-aeae-3a0b0fffd14b';
 const fallbackAddress = 'ProxyIP.cmliussss.net';
 const fallbackPort = '443';
 const socks5Config = '';
@@ -49,6 +49,15 @@ export default {
 		try {
 			const url = new URL(request.url);
 
+			if (socks5Config) {
+				try {
+					parsedSocks5Config = parseSocksConfig(socks5Config);
+					isSocksEnabled = true;
+				} catch (err) {
+					isSocksEnabled = false;
+				}
+			}
+
 			if (request.headers.get('Upgrade') === 'websocket') {
 				return await handleWsRequest(request);
 			} else if (request.method === 'GET') {
@@ -92,6 +101,56 @@ export default {
 		}
 	},
 };
+
+function parseSocksConfig(address) {
+	let [latter, former] = address.split("@").reverse(); 
+	let username, password, hostname, socksPort;
+	
+	if (former) { 
+		const formers = former.split(":"); 
+		if (formers.length !== 2) throw new Error(E_INVALID_SOCKS_ADDR);
+		[username, password] = formers; 
+	}
+	
+	const latters = latter.split(":"); 
+	socksPort = Number(latters.pop()); 
+	if (isNaN(socksPort)) throw new Error(E_INVALID_SOCKS_ADDR);
+	
+	hostname = latters.join(":"); 
+	if (hostname.includes(":") && !/^\[.*\]$/.test(hostname)) throw new Error(E_INVALID_SOCKS_ADDR);
+	
+	return { username, password, hostname, socksPort };
+}
+
+async function establishSocksConnection(addrType, address, port) {
+    const { username, password, hostname, socksPort } = parsedSocks5Config;
+    const socket = connect({ hostname, port: socksPort });
+    const writer = socket.writable.getWriter();
+    await writer.write(new Uint8Array(username ? [5, 2, 0, 2] : [5, 1, 0]));
+    const reader = socket.readable.getReader();
+    let res = (await reader.read()).value;
+    if (res[0] !== 5 || res[1] === 255) throw new Error(E_SOCKS_NO_METHOD);
+    if (res[1] === 2) {
+        if (!username || !password) throw new Error(E_SOCKS_AUTH_NEEDED);
+        const encoder = new TextEncoder();
+        const authRequest = new Uint8Array([1, username.length, ...encoder.encode(username), password.length, ...encoder.encode(password)]);
+        await writer.write(authRequest);
+        res = (await reader.read()).value;
+        if (res[0] !== 1 || res[1] !== 0) throw new Error(E_SOCKS_AUTH_FAIL);
+    }
+    const encoder = new TextEncoder(); let DSTADDR;
+    switch (addrType) {
+        case ADDRESS_TYPE_IPV4: DSTADDR = new Uint8Array([1, ...address.split('.').map(Number)]); break;
+        case ADDRESS_TYPE_URL: DSTADDR = new Uint8Array([3, address.length, ...encoder.encode(address)]); break;
+        case ADDRESS_TYPE_IPV6: DSTADDR = new Uint8Array([4, ...address.split(':').flatMap(x => [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2), 16)])]); break;
+        default: throw new Error(E_INVALID_ADDR_TYPE);
+    }
+    await writer.write(new Uint8Array([5, 1, 0, ...DSTADDR, port >> 8, port & 255]));
+    res = (await reader.read()).value;
+    if (res[1] !== 0) throw new Error(E_SOCKS_CONN_FAIL);
+    writer.releaseLock(); reader.releaseLock();
+    return socket;
+}
 
 async function handleSubscriptionPage(request, uuid = null) {
 	if (!uuid) uuid = authToken;
@@ -683,29 +742,127 @@ async function handleWsRequest(request) {
     return new Response(null, { status: 101, webSocket: clientSock });
 }
 
+// async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remoteConnWrapper) {
+//     async function connectAndSend(address, port) {
+//         const remoteSock = connect({ hostname: address, port: port });
+//         const writer = remoteSock.writable.getWriter();
+//         await writer.write(rawData);
+//         writer.releaseLock();
+//         return remoteSock;
+//     }
+//     // async function connectViaSocks5(proxyHost, proxyPort, targetHost, targetPort) {
+//     //     const { username, password, hostname, socksPort } = parsedSocks5Config;
+
+//     //     const controller = new AbortController();
+//     //     const timeout = setTimeout(() => controller.abort(), 5000);
+//     //     const socket = connect({ hostname: proxyHost, port: proxyPort, signal: controller.signal });
+//     //     clearTimeout(timeout);
+
+//     //     const writer = socket.writable.getWriter();
+//     //     const reader = socket.readable.getReader();
+
+//     //     // 1. 发送认证协商
+//     //     await writer.write(new Uint8Array(username ? [5, 2, 0, 2] : [5, 1, 0]));
+
+//     //     // 2. 读取协商响应
+//     //     let res = (await reader.read()).value;
+//     //     if (res[0] !== 5 || res[1] === 255) throw new Error(E_SOCKS_NO_METHOD);
+//     //     if (res[1] === 2) {
+//     //         if (!username || !password) throw new Error(E_SOCKS_AUTH_NEEDED);
+//     //         const encoder = new TextEncoder();
+//     //         const authRequest = new Uint8Array([1, username.length, ...encoder.encode(username), password.length, ...encoder.encode(password)]);
+//     //         await writer.write(authRequest);
+//     //         res = (await reader.read()).value;
+//     //         if (res[0] !== 1 || res[1] !== 0) throw new Error(E_SOCKS_AUTH_FAIL);
+//     //     }
+
+//     //     // 3. 构造 CONNECT 请求
+//     //     const encoder = new TextEncoder(); let DSTADDR;
+//     //     switch (addrType) {
+//     //         case ADDRESS_TYPE_IPV4: DSTADDR = new Uint8Array([1, ...targetHost.split('.').map(Number)]); break;
+//     //         case ADDRESS_TYPE_URL: DSTADDR = new Uint8Array([3, targetHost.length, ...encoder.encode(targetHost)]); break;
+//     //         case ADDRESS_TYPE_IPV6: DSTADDR = new Uint8Array([4, ...targetHost.split(':').flatMap(x => [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2), 16)])]); break;
+//     //         default: throw new Error(E_INVALID_ADDR_TYPE);
+//     //     }
+//     //     await writer.write(new Uint8Array([5, 1, 0, ...DSTADDR, targetPort >> 8, targetPort & 255]));
+
+//     //     // 4. 读取 CONNECT 响应
+//     //     const { value: connResp } = await reader.read();
+//     //     if (connResp[1] !== 0x00) throw new Error("SOCKS5 CONNECT failed");
+
+//     //     // 5. 发送原始数据
+//     //     await writer.write(rawData);
+//     //     writer.releaseLock();
+
+//     //     return socket;
+//     // }
+//     async function retryConnection() {
+//         const newSocket = await connectAndSend(fallbackAddress || host, parseInt(fallbackPort, 10) || portNum);
+//         remoteConnWrapper.socket = newSocket;
+//         newSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
+//         connectStreams(newSocket, ws, respHeader, null);
+//     }
+//     try {
+//         const initialSocket = await connectAndSend(host, portNum);
+//         remoteConnWrapper.socket = initialSocket;
+//         connectStreams(initialSocket, ws, respHeader, retryConnection);
+//     } catch (err) {
+//         console.log('Initial connection failed, trying fallback:', err);
+//         retryConnection();
+//     }
+// }
+
+
 async function forwardTCP(addrType, host, portNum, rawData, ws, respHeader, remoteConnWrapper) {
-    async function connectAndSend(address, port) {
-        const remoteSock = connect({ hostname: address, port: port });
+    async function connectAndSend(address, port, useSocks = false) {
+        const remoteSock = useSocks ?
+            await establishSocksConnection(addrType, address, port) :
+            connect({ hostname: address, port: port });
         const writer = remoteSock.writable.getWriter();
         await writer.write(rawData);
         writer.releaseLock();
         return remoteSock;
     }
+    
     async function retryConnection() {
-        const newSocket = await connectAndSend(fallbackAddress || host, parseInt(fallbackPort, 10) || portNum);
-        remoteConnWrapper.socket = newSocket;
-        newSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
-        connectStreams(newSocket, ws, respHeader, null);
+        if (isSocksEnabled) {
+            try {
+                const socksSocket = await connectAndSend(host, portNum, true);
+                remoteConnWrapper.socket = socksSocket;
+                socksSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
+                connectStreams(socksSocket, ws, respHeader, null);
+                return;
+            } catch (socksErr) {
+                try {
+                    const fallbackSocket = await connectAndSend(fallbackAddress || host, parseInt(fallbackPort, 10) || portNum, false);
+                    remoteConnWrapper.socket = fallbackSocket;
+                    fallbackSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
+                    connectStreams(fallbackSocket, ws, respHeader, null);
+                } catch (fallbackErr) {
+                    closeSocketQuietly(ws);
+                }
+            }
+        } else {
+            try {
+                const fallbackSocket = await connectAndSend(fallbackAddress || host, parseInt(fallbackPort, 10) || portNum, isSocksEnabled);
+                remoteConnWrapper.socket = fallbackSocket;
+                fallbackSocket.closed.catch(() => {}).finally(() => closeSocketQuietly(ws));
+                connectStreams(fallbackSocket, ws, respHeader, null);
+            } catch (fallbackErr) {
+                closeSocketQuietly(ws);
+            }
+        }
     }
+    
     try {
-        const initialSocket = await connectAndSend(host, portNum);
+        const initialSocket = await connectAndSend(host, portNum, isSocksEnabled);
         remoteConnWrapper.socket = initialSocket;
         connectStreams(initialSocket, ws, respHeader, retryConnection);
     } catch (err) {
-        console.log('Initial connection failed, trying fallback:', err);
         retryConnection();
     }
 }
+
 
 function parseWsPacketHeader(chunk, token) {
 	if (chunk.byteLength < 24) return { hasError: true, message: E_INVALID_DATA };
