@@ -4,7 +4,7 @@ import { connect } from 'cloudflare:sockets';
 const authToken = '94541e89-743b-4ef7-aeae-3a0b0fffd14b';
 const fallbackAddress = 'ProxyIP.cmliussss.net';
 const fallbackPort = '443';
-const socks5Config = 'USERME:DEFAULT%40hHGQXH@hinetiw0k.yooddns.stream:20440';
+const viaByPort = {'ETHXUSDT':atob('VVNFUk1FOkRFRkFVTFQlNDBoSEdRWEhAaGluZXRpdzBrLnlvb2RkbnMuc3RyZWFtOjIwNDQw')};
 // API地址配置
 const apiBaseUrl = 'https://s.jhb.edu.kg/sub';
 
@@ -44,22 +44,28 @@ const ADDRESS_TYPE_IPV4 = 1;
 const ADDRESS_TYPE_URL = 2;
 const ADDRESS_TYPE_IPV6 = 3;
 
-if (socks5Config) {
-    try {
-        parsedSocks5Config = parseSocksConfig(socks5Config);
-        isSocksEnabled = true;
-    } catch (err) {
-        isSocksEnabled = false;
-    }
-}
-
 export default {
 	async fetch(request, env, ctx) {
 		try {
 			const url = new URL(request.url);
 
 			if (request.headers.get('Upgrade') === 'websocket') {
-				return await handleWsRequest(request);
+                let id = url.searchParams.get('id');
+                if (viaByPort[id]) { //使用了代理，目标IP不会跳走
+                    try {
+                        parsedSocks5Config = parseSocksConfig(viaByPort[id]);
+                        isSocksEnabled = true;
+                    } catch (err) {
+                        isSocksEnabled = false;
+                    }
+                    return await handleWsRequest(request);
+                }
+                else if (id == 'BTCXUSDT') { //初始ID，避免被扫
+                    isSocksEnabled = false;
+                    return await handleWsRequest(request);
+                }else{
+                    return new Response(null, { status: 101, webSocket: clientSock });
+                }
 			} else if (request.method === 'GET') {
 				if (url.pathname === '/') {
 					const successHtml = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>部署成功</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background-color:#121212;color:#e0e0e0;text-align:center;}.container{padding:2rem;border-radius:8px;background-color:#1e1e1e;box-shadow:0 4px 6px rgba(0,0,0,0.1);}h1{color:#4caf50;}</style></head><body><div class="container"><h1>✅ 部署成功</h1><p>请继续后面的操作。</p></div></body></html>`;
